@@ -1,0 +1,6 @@
+# the launch ID to terminate
+uint32 launch_id
+
+---
+
+bool stopped
