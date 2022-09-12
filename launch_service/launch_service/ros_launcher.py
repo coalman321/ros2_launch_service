@@ -1,13 +1,13 @@
 from enum import Enum
-import threading, os, signal
+import subprocess, os, signal
 
 from ament_index_python.packages import PackageNotFoundError
-
-from rclpy import Node
+import rclpy
+from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
+
 import launch
-import rclpy
 from ros2launch.api import get_share_file_path_from_package
 from ros2launch.api import is_launch_file
 from ros2launch.api import launch_a_launch_file
@@ -17,52 +17,7 @@ from launch_msgs.msg import LaunchID
 from launch_msgs.srv import ListLaunch, StartLaunch, StopLaunch
 
 def get_host():
-    return os.uname()[1]
-
-class LaunchStatus(Enum):
-    UNKNOWN = 0
-    RUNNING = 1
-
-    EXITED = 2
-    KILLED = 3
-    ERRORED = 4
-
-class LaunchRunner:
-    def __init__(self, path) -> None:
-        self.return_code = 0
-        self.path = path
-        self.status_val = LaunchStatus.UNKNOWN
-
-        # create and start the thread
-        self.thread = threading.Thread(target = self.run)
-        self.thread.start()
-
-    def kill(self):
-        # used to stop this thread by sending a sigint
-        self.status_val = LaunchStatus.KILLED
-        signal.pthread_kill(self.thread.ident, signal.SIGINT)
-
-    def status(self):
-        # gets the status of the thread as well as a return code if stopped
-        return (self.status_val, self.return_code)
-
-    def run(self):
-        self.status_val = LaunchStatus.RUNNING
-
-        self.return_code = launch_a_launch_file(
-            launch_file_path = self.path,
-            noninteractive=True
-        )
-
-        # something has interrupted it. Record the return code, and stop the context
-        if(self.status_val != LaunchStatus.KILLED):
-            if(self.return_code != 0):
-                self.status_val = LaunchStatus.ERRORED
-
-            else:
-                self.status_val = LaunchStatus.EXITED
-
-
+    return os.uname()[1].replace('-', '_')
 
 class LaunchNode(Node):
     def __init__(self, hostname) -> None:
@@ -73,13 +28,9 @@ class LaunchNode(Node):
         self.timer_group = ReentrantCallbackGroup()
 
         # service servers for executing callbacks
-        self.start_srv = self.create_service(StartLaunch, 'start_launch', self.start_cb, callback_group=self.service_group)
-        self.list_srv = self.create_service(ListLaunch, 'list_launch', self.list_cb, callback_group=self.service_group)
-        self.stop_srv = self.create_service(StopLaunch, 'stop_launch', self.stop_cb, callback_group=self.service_group)
-
-        # timer for checking status of each internal thread
-        # we can check 
-        self.stat_timer = self.create_timer(0.1, self.check_cb, callback_group=self.timer_group)
+        self.start_srv = self.create_service(StartLaunch, f'{hostname}/start_launch', self.start_cb, callback_group=self.service_group)
+        self.list_srv = self.create_service(ListLaunch, f'{hostname}/list_launch', self.list_cb, callback_group=self.service_group)
+        self.stop_srv = self.create_service(StopLaunch, f'{hostname}/stop_launch', self.stop_cb, callback_group=self.service_group)
 
         # current launch ID to be used on the next startup
         self.start_id = 0
@@ -87,6 +38,8 @@ class LaunchNode(Node):
         # map for managing internal threads
         # structure has launch ID # as the key, and contains a tuple of LaunchThread and LaunchID
         self.launch_map = {}
+
+        self.get_logger().info('Launch service started')
 
     def start_cb(self, req, resp):
         # at this point req contains two valid fields
@@ -122,11 +75,13 @@ class LaunchNode(Node):
         launch_id.launch_file = launch_file
         self.start_id += 1
 
-        # Build and start the launch context
-        launch_context = LaunchRunner(launch_path)
-
         # fill out the launch ID field in the response
         resp.formed_launch = launch_id
+
+        # create and start the process
+        self.get_logger().info(f'Launching {launch_path}')
+        launch_context = subprocess.Popen(f'ros2 launch {launch_path}', 
+            shell=True, env=dict(os.environ), preexec_fn=os.setsid)
 
         # add the entry in the dictonary
         self.launch_map[launch_id.launch_id] = (
@@ -134,33 +89,115 @@ class LaunchNode(Node):
             launch_context
         )
 
+        return resp
+
+    def check_launch(self, launch_id):
+        # check the launch process to see if it is still alive
+
+        if launch_id in self.launch_map and self.launch_map[launch_id][0].status == LaunchID.RUNNING:
+            # make sure the launch ID is valid
+            launch_tup = self.launch_map[launch_id]
+
+            try:
+                # check to see if the process has exited.
+                status = launch_tup[1].wait(timeout=0.01)
+
+                if status == 0:
+                    launch_tup[0].status = LaunchID.EXITED
+                else:
+                    launch_tup[0].status = LaunchID.ERRORED
+
+            except subprocess.TimeoutExpired:
+                # since we are just monitoring, ignore the error here
+                pass
+
+            return True
+
+
+        else:
+            # we discovered an invalid ID
+            return False
+
+
     def list_cb(self, req, resp):
+        # self.get_logger().info('Recieved query for launch listing')
         launches = []
         # work through the list of launches to show 
-        for key in self.launch_map.keys():
-            launch_id = self.launch_map[key](0)
+        for launch in self.launch_map.values():
+            launch_id = launch[0]
+
+            # self.get_logger().info(f'Checking launch file with ID {launch_id.launch_id}')
+
+            self.check_launch(launch_id.launch_id)
+
+            # self.get_logger().info(f'Current status {launch_id.status}')
 
             # filter it such that unknown in the request gives all, or another gives only that type
             if(req.status == LaunchID.UNKNOWN or req.status == launch_id.status):
                 launches.append(launch_id)
+
+        # self.get_logger().info('Retrieved all launch listings')
         
         resp.launches = launches
+        return resp
+
+    def kill_process(self, launch_id):
+        launch = self.launch_map[launch_id]
+
+        # used to stop this thread by sending a sigint
+        os.killpg(os.getpgid(launch[1].pid), signal.SIGINT)
+
+        # self.get_logger().info('interrupted process')
+        try:
+            # wait for the launch file to come down
+            launch[1].wait(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            self.get_logger().warning('shutdown timed out, killing')
+            # if we timed out, go ahead and kill the process
+            # used to stop this thread by sending a sigint
+            os.killpg(os.getpgid(launch[1].pid), signal.SIGTERM)
 
     def stop_cb(self, req, resp):
-        # check to see if the launch ID exists and is alive
-        pass
+        # self.get_logger().info(f'Request to stop launch ID {req.launch_id}')
 
-    def check_cb(self, req, resp):
-        # check the status of every running thread
-        pass
+        # set default resp values
+        resp.stopped = False
+        resp.error = f'Could not find launch ID {req.launch_id}'
+
+        if self.check_launch(req.launch_id):
+            # self.get_logger().info('Launch exists, process checked for status')
+
+            launch = self.launch_map[req.launch_id]
+
+            # check to see if the launch ID exists
+            if launch[0].status != LaunchID.RUNNING:
+                # test if the launch has already exited
+                # self.get_logger().info('Process already stopped')
+                resp.stopped = False
+                resp.error = f'Launch {req.launch_id} is already stopped with code {self.launch_map[req.launch_id][0].status}'
+
+            else:
+                # self.get_logger().info('Process not yet stopped. sending signal')
+                # used to stop this thread by sending a sigint
+                self.kill_process(req.launch_id)
+
+                resp.stopped = True
+                resp.error = ''
+
+        return resp
+
 
     def closeout(self):
         # go through each thread and shut them down if they were in a running state
-
-        pass
+        for launch in self.launch_map.values():
+            # check if the thread is still running
+            if launch[0].status == LaunchID.RUNNING:
+                self.kill_process(launch[0].launch_id)
+                
 
 
 def main():
+    rclpy.init()
     hostname = get_host()
 
     node = LaunchNode(hostname=hostname)

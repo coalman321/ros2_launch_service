@@ -2,7 +2,7 @@
 uint32 NO_ID = 0
 
 # enumeration for the process status
-uint8 INVALID = 0
+uint8 UNKNOWN = 0
 uint8 QUEUED = 1
 uint8 RUNNING = 2
 uint8 ERRORED = 3

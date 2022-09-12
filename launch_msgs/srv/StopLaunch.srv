@@ -4,3 +4,4 @@ uint32 launch_id
 ---
 
 bool stopped
+string error
