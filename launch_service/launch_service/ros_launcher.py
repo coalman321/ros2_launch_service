@@ -1,4 +1,3 @@
-from enum import Enum
 import subprocess, os, signal
 
 from ament_index_python.packages import PackageNotFoundError
@@ -7,10 +6,8 @@ from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
 
-import launch
 from ros2launch.api import get_share_file_path_from_package
 from ros2launch.api import is_launch_file
-from ros2launch.api import launch_a_launch_file
 from ros2launch.api import MultipleLaunchFilesError
 
 from launch_msgs.msg import LaunchID
@@ -88,6 +85,10 @@ class LaunchNode(Node):
             launch_id,
             launch_context
         )
+
+        # fill out the resp
+        resp.started = True
+        resp.error = ''
 
         return resp
 
@@ -190,11 +191,16 @@ class LaunchNode(Node):
     def closeout(self):
         # go through each thread and shut them down if they were in a running state
         for launch in self.launch_map.values():
+            id = launch[0].launch_id
+
+            # make sure the info is up to date on the process
+            self.check_launch(id)
+
             # check if the thread is still running
             if launch[0].status == LaunchID.RUNNING:
-                self.kill_process(launch[0].launch_id)
+                print(f'killing {id}')
+                self.kill_process(id)
                 
-
 
 def main():
     rclpy.init()
@@ -205,19 +211,15 @@ def main():
     # create the executro with 2 threads. one for each group
     exec = MultiThreadedExecutor(2)
 
-    # spin the ros threads
-    rclpy.spin(node, executor=exec)
+    try:
+        # spin the ros threads
+        rclpy.spin(node, executor=exec)
 
-    # we have been intterupted, shut down all the running threads
-    node.closeout()
+    except KeyboardInterrupt:
+        node.closeout()
 
     # when interrupted, shut down cleanly
-    node.destroy_node()
     rclpy.shutdown()
-    
-
-
-
 
 if __name__ == '__main__':
     main()
