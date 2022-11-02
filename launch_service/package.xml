@@ -2,10 +2,10 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>launch_service</name>
-  <version>0.0.0</version>
-  <description>TODO: Package description</description>
-  <maintainer email="coalman321@todo.todo">coalman321</maintainer>
-  <license>TODO: License declaration</license>
+  <version>1.0.0</version>
+  <description>A ROS2 package for starting up launch files on remote stystems</description>
+  <maintainer email="coalman321@outlook.com">Cole Tucker</maintainer>
+  <license>Apache 2.0</license>
 
   <exec_depend>rclpy</exec_depend>
   <exec_depend>ros2launch</exec_depend>
