@@ -1,5 +1,5 @@
 # Request
-int16 pid
+int32 pid
 ---
 # Result 
 ---

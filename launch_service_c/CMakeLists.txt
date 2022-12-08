@@ -10,6 +10,7 @@ find_package(pybind11 REQUIRED)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(launch_msgs REQUIRED)
+find_package(ament_index_cpp REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
@@ -31,6 +32,7 @@ ament_target_dependencies(launch_service_c
   pybind11
   launch_msgs
   geometry_msgs
+  ament_index_cpp
   rclcpp_action
   sensor_msgs
   std_msgs
